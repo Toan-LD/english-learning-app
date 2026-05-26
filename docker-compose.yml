@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: english_platform_db
+    environment:
+      POSTGRES_DB: english_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Celery and caching
+  redis:
+    image: redis:7-alpine
+    container_name: english_platform_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Django Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: english_platform_backend
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py seed_db &&
+             python manage.py runserver 0.0.0.0:8081"
+    volumes:
+      - ./backend:/app
+      - backend_static:/app/staticfiles
+      - backend_media:/app/media
+    ports:
+      - "8081:8081"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=django-insecure-dev-key-change-in-production-abc123xyz789def456
+      - DB_NAME=english_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:80
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: english_platform_celery_worker
+    command: celery -A english_platform worker -l info
+    volumes:
+      - ./backend:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=django-insecure-dev-key-change-in-production-abc123xyz789def456
+      - DB_NAME=english_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - backend
+      - redis
+
+  # Celery Beat (scheduled tasks)
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: english_platform_celery_beat
+    command: celery -A english_platform beat -l info
+    volumes:
+      - ./backend:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=django-insecure-dev-key-change-in-production-abc123xyz789def456
+      - DB_NAME=english_platform
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - backend
+      - redis
+
+  # React Frontend (Development)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: english_platform_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  backend_static:
+  backend_media:
